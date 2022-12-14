@@ -10,11 +10,30 @@ import torch.nn.functional as F
 
 import time
 
+from dataclasses import dataclass
+
 def seed_everything(seed):
     torch.manual_seed(seed)
     torch.cuda.manual_seed(seed)
     #torch.backends.cudnn.deterministic = True
     #torch.backends.cudnn.benchmark = True
+
+@dataclass
+class UNet2DConditionOutput:
+    sample: torch.FloatTensor
+
+class TracedUNet(torch.nn.Module):
+    def __init__(self, device, token):
+        super().__init__()
+        self.device = device
+        self.token = token
+        self.unet = UNet2DConditionModel.from_pretrained("runwayml/stable-diffusion-v1-5", subfolder="unet", use_auth_token=self.token).to(self.device)
+        self.in_channels = self.unet.in_channels
+        self.unet_traced = torch.jit.load("unet_traced.pt")
+
+    def forward(self, latent_model_input, t, encoder_hidden_states):
+        sample = self.unet_traced(latent_model_input, t, encoder_hidden_states)[0]
+        return UNet2DConditionOutput(sample=sample)
 
 class StableDiffusion(nn.Module):
     def __init__(self, device, sd_version='2.0'):
@@ -36,7 +55,8 @@ class StableDiffusion(nn.Module):
         self.vae = AutoencoderKL.from_pretrained(model_key, subfolder="vae").to(self.device)
         self.tokenizer = CLIPTokenizer.from_pretrained(model_key, subfolder="tokenizer")
         self.text_encoder = CLIPTextModel.from_pretrained(model_key, subfolder="text_encoder").to(self.device)
-        self.unet = UNet2DConditionModel.from_pretrained(model_key, subfolder="unet").to(self.device)
+        #self.unet = UNet2DConditionModel.from_pretrained(model_key, subfolder="unet").to(self.device)
+        self.unet = TracedUNet(self.device, self.token).to(self.device)
         
         self.scheduler = DDIMScheduler.from_config(model_key, subfolder="scheduler")
         # self.scheduler = PNDMScheduler.from_config(model_key, subfolder="scheduler")
